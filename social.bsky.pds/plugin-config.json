@@ -1,0 +1,18 @@
+{
+	"id": "social.bsky.pds",
+	"display_name": "Bluesky (Custom Provider)",
+	"service_name": "Bluesky",
+	"default_color": "blue",
+	"icon": "https://web-cdn.bsky.app/static/apple-touch-icon.png",
+	"item_style": "post",
+	"site_prompt": "Custom Provider",
+	"site_placeholder": "https://bsky.social",
+	"site_help": "Bluesky is an open network where you can choose your hosting provider. If you're a developer, you can host your own server. [Learn more.](https://atproto.com/guides/self-hosting)",
+	"jwt_prompt": "Email Address",
+	"jwt_authorize": "/xrpc/com.atproto.server.createSession",
+	"jwt_refresh": "/xrpc/com.atproto.server.refreshSession",
+	"refresh_status_code": 400,
+	"fail_status_code": 400,
+	"provides_attachments": true,
+	"check_interval": 300
+}
