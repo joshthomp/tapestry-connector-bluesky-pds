@@ -25,4 +25,4 @@ jobs:
         with:
           files: ${{ env.PLUGIN_NAME }}.tapestry
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_TOKEN: ${{ secrets.social.bsky.pds.tapestry }}
