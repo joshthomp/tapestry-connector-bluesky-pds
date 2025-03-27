@@ -10,7 +10,7 @@
 ## Usage
 This connector allows you to specify a custom hosting provider or personal data server (PDS) for Bluesky.
 
-1. Download the [social.bsky.pds.tapestry](social.bsky.pds.tapestry) file to your iOS device.
+1. Download the [[social.bsky.pds.tapestry](social.bsky.pds.tapestry)](https://github.com/joshthomp/tapestry-connector-bluesky-pds/releases/latest) file to your iOS device.
 2. Follow the instructions from [The Iconfactory](https://usetapestry.com/connectors/) below.
 
 >If someone creates a connector you want to use, they are easy to download and install.
