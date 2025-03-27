@@ -3,7 +3,7 @@
 	"display_name": "Bluesky (Custom Provider)",
 	"service_name": "Bluesky",
 	"default_color": "blue",
-	"icon": "https://web-cdn.bsky.app/static/apple-touch-icon.png",
+	"icon": "https://bsky.app/static/apple-touch-icon.png",
 	"item_style": "post",
 	"site_prompt": "Custom Provider",
 	"site_placeholder": "https://bsky.social",
@@ -14,5 +14,6 @@
 	"refresh_status_code": 400,
 	"fail_status_code": 400,
 	"provides_attachments": true,
-	"check_interval": 300
+	"check_interval": 300,
+	"version": 3
 }
