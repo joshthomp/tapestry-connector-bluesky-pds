@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@v2
 
       - name: Zip Folder
-        run: zip -j ${{ env.PLUGIN_NAME }}.tapestry ${{ env.PLUGIN_NAME }}/*
+        run: zip -r ${{ env.PLUGIN_NAME }}.tapestry ${{ env.PLUGIN_NAME }}
 
       - name: Release
         uses: softprops/action-gh-release@v1
