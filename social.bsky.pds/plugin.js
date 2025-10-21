@@ -13,6 +13,7 @@ function verify() {
 		const did = jsonObject.did;
 
 		setItem("did", did);
+		setItem("didSelf", did);
 		
 		sendRequest(site + `/xrpc/app.bsky.actor.getProfile?actor=${did}`)
 		.then((text) => {
@@ -42,12 +43,18 @@ function verify() {
 // NOTE: This reference counter tracks loading so we can let the app know when all async loading work is complete.
 var loadCounter = 0;
 
-function load() {
+async function load() {
 	// NOTE: The timeline will be filled up to the endDate, if possible.
 	let endDate = null;
 	let endDateTimestamp = getItem("endDateTimestamp");
 	if (endDateTimestamp != null) {
 		endDate = new Date(parseInt(endDateTimestamp));
+	}
+
+	let didSelf = getItem("didSelf");
+	if (didSelf == null) {
+		didSelf = await getSessionDid();
+		setItem("didSelf", didSelf);
 	}
 
 	loadCounter = 0;
@@ -96,127 +103,6 @@ function load() {
 	}
 }
 
-async function performAction(actionId, actionValue, item) {
-	let actions = item.actions;
-	let actionValues = JSON.parse(actionValue);
-	
-	try {
-		let did = getItem("did");
-		if (did == null) {
-			did = await getDid();
-			setItem("did", did);
-		}
-
-		let date = new Date().toISOString();
-		if (actionId == "like") {
-			const body = {
-				collection: "app.bsky.feed.like",
-				repo: did,
-				record : {
-					"$type": "app.bsky.feed.like",
-					subject: {
-						uri: actionValues["uri"],
-						cid: actionValues["cid"]
-					},
-					createdAt: date,
-				}
-			};
-			
-			const url = `${site}/xrpc/com.atproto.repo.createRecord`;
-			const parameters = JSON.stringify(body);
-			const extraHeaders = { "content-type": "application/json" };
-			const text = await sendRequest(url, "POST", parameters, extraHeaders);
-			const jsonObject = JSON.parse(text);
-			const rkey = jsonObject.uri.split("/").pop();
-			
-			delete actions["like"];
-			const values = { uri: actionValues["uri"], cid: actionValues["cid"], rkey: rkey };
-			actions["unlike"] = JSON.stringify(values);
-			item.actions = actions;
-			actionComplete(item, null);
-		}
-		else if (actionId == "unlike") {
-			const body = {
-				collection: "app.bsky.feed.like",
-				repo: did,
-				rkey: actionValues["rkey"]
-			};
-			
-			const url = `${site}/xrpc/com.atproto.repo.deleteRecord`;
-			const parameters = JSON.stringify(body);
-			const extraHeaders = { "content-type": "application/json" };
-			const text = await sendRequest(url, "POST", parameters, extraHeaders);
-			const jsonObject = JSON.parse(text);
-
-			delete actions["unlike"];
-			const values = { uri: actionValues["uri"], cid: actionValues["cid"] };
-			actions["like"] = JSON.stringify(values);
-			item.actions = actions;
-			actionComplete(item, null);
-		}
-		else if (actionId == "repost") {
-			const body = {
-				collection: "app.bsky.feed.repost",
-				repo: did,
-				record : {
-					"$type": "app.bsky.feed.repost",
-					subject: {
-						uri: actionValues["uri"],
-						cid: actionValues["cid"]
-					},
-					createdAt: date,
-				}
-			};
-			
-			const url = `${site}/xrpc/com.atproto.repo.createRecord`;
-			const parameters = JSON.stringify(body);
-			const extraHeaders = { "content-type": "application/json" };
-			const text = await sendRequest(url, "POST", parameters, extraHeaders);
-			const jsonObject = JSON.parse(text);
-			const rkey = jsonObject.uri.split("/").pop();
-			
-			delete actions["repost"];
-			const values = { uri: actionValues["uri"], cid: actionValues["cid"], rkey: rkey };
-			actions["unrepost"] = JSON.stringify(values);
-			item.actions = actions;
-			actionComplete(item, null);
-		}
-		else if (actionId == "unrepost") {
-			const body = {
-				collection: "app.bsky.feed.repost",
-				repo: did,
-				rkey: actionValues["rkey"]
-			};
-			
-			const url = `${site}/xrpc/com.atproto.repo.deleteRecord`;
-			const parameters = JSON.stringify(body);
-			const extraHeaders = { "content-type": "application/json" };
-			const text = await sendRequest(url, "POST", parameters, extraHeaders);
-			const jsonObject = JSON.parse(text);
-			
-			delete actions["unrepost"];
-			const values = { uri: actionValues["uri"], cid: actionValues["cid"] };
-			actions["repost"] = JSON.stringify(values);
-			item.actions = actions;
-			actionComplete(item, null);
-		}
-		else {
-			let error = new Error(`actionId "${actionId}" not implemented`);
-			actionComplete(null, error);
-		}
-	}
-	catch (error) {
-		actionComplete(null, error);
-	}
-}
-
-async function getDid() {
-	const text = await sendRequest(site + "/xrpc/com.atproto.server.getSession");
-	const jsonObject = JSON.parse(text);
-	const did = jsonObject.did;
-	return did;
-}
-
 function queryTimeline(endDate) {
 
 	// NOTE: These constants are related to the feed limits within Tapestry - it doesn't store more than
@@ -257,7 +143,7 @@ function queryTimeline(endDate) {
 				const jsonObject = JSON.parse(text);
 				const items = jsonObject.feed
 				for (const item of items) {
-					const post = postForItem(item, true);
+					const post = postForItem(item, true, null, false);
 					if (post != null) {
 						results.push(post);
 						

@@ -5,7 +5,48 @@ const uriPrefix = "https://bsky.app";
 const uriPrefixContent = "https://cdn.bsky.app";
 const uriPrefixVideo = "https://video.bsky.app";
 
-function postForItem(item, includeActions = false, dateOverride = null) {
+async function getSessionDid() {
+	const text = await sendRequest(site + "/xrpc/com.atproto.server.getSession");
+	const jsonObject = JSON.parse(text);
+	const did = jsonObject.did;
+	return did;
+}
+
+async function getAccountDid(account) {
+	const text = await sendRequest(`${site}/xrpc/app.bsky.actor.getProfile?actor=${account}`)
+	const jsonObject = JSON.parse(text);	
+	const did = jsonObject.did;
+	return did;
+}
+
+function normalizeAccount(account) {
+	let result = account.trim();
+	if (result.length > 1 && result.startsWith("@")) {
+		result = result.slice(1);
+	}
+	return result;
+}
+
+function parentsForItem(item, includeActions) {
+	let results = [];
+	if (item.parent != null) {
+		parentPostForItem(item.parent, includeActions, results);
+	}
+	return results;
+}
+
+function parentPostForItem(item, includeActions, results) {
+	if (item.parent != null) {
+		parentPostForItem(item.parent, includeActions, results);
+	}
+
+	const post = postForItem(item, includeActions);
+	if (post != null) {
+		results.push(post);
+	}
+}
+
+function postForItem(item, includeActions = false, dateOverride = null, allowRepliesFromOthers = true) {
     let date = dateOverride ?? (new Date(item.post.indexedAt));
 
     const author = item.post.author;
@@ -15,9 +56,17 @@ function postForItem(item, includeActions = false, dateOverride = null) {
     const inReplyToRecord = item.reply && item.reply.record
     const reason = item.reason
     const record = item.post.record;
-                
-    let content = contentForRecord(item.post.record);
     
+    if (item.reply != null) {
+    	if (! allowRepliesFromOthers) {
+			if (item.reply.parent?.author?.viewer.following == null) {
+				return null;
+			}
+		}
+	}
+            
+    let content = contentForRecord(item.post.record);
+        
     let actions = {};
     if (includeActions) {
         if (item.post.viewer?.like != null) {
@@ -38,7 +87,25 @@ function postForItem(item, includeActions = false, dateOverride = null) {
             const values = { uri: item.post.uri, cid: item.post.cid };
             actions["repost"] = JSON.stringify(values);
         }
+        if (item.post.viewer?.bookmarked != null) {
+        	if (item.post.viewer?.bookmarked == false) {
+    			const values = { uri: item.post.uri, cid: item.post.cid };
+            	actions["save"] = JSON.stringify(values);
+            }
+            else {
+    			const values = { uri: item.post.uri, cid: item.post.cid };
+            	actions["unsave"] = JSON.stringify(values);
+            }
+        }
     }
+	if (item.post?.replyCount > 0) {
+		const values = { uri: item.post.uri, cid: item.post.cid };
+		actions["replies"] = JSON.stringify(values);
+	}
+	else {
+		const values = { uri: item.post.uri, cid: item.post.cid };
+		actions["thread"] = JSON.stringify(values);
+	}
 
     let contentWarning = null;
     if (item.post.labels != null && item.post.labels.length > 0) {
@@ -48,12 +115,17 @@ function postForItem(item, includeActions = false, dateOverride = null) {
     
     let annotation = null;
     
-    const replyContent = contentForReply(item.reply);
-    if (replyContent != null) {
-        annotation = annotationForReply(item.reply);
-        content = replyContent + content;
-    }
-
+    let replyContent = null;
+    if (item.reply != null) {
+        annotation = annotationForReply(item);
+		if (item.post.author.handle != item.reply.parent?.author?.handle) {					
+			replyContent = contentForReply(item.reply);
+			if (replyContent != null) {
+				content = replyContent + content;
+			}
+		}
+	}
+	
     const repostContent = contentForRepost(item.reason);
     if (repostContent != null) {
         if (item.reason.indexedAt != null) {
@@ -172,6 +244,11 @@ function nameForAccount(account) {
         return null;
     }
 
+	const did = getItem("didSelf");
+	if (did != null && did == account.did) {
+		return "you";
+	}
+	
     if (account.displayName != null && account.displayName.length > 0) {
         return account.displayName;
     }
@@ -222,15 +299,22 @@ function contentForRepost(reason) {
     return content;
 }
 
-function annotationForReply(reply) {
+function annotationForReply(item) {
     let annotation = null;
 
-    if (reply != null && reply.parent != null) {
-        let name = nameForAccount(reply.parent.author);
-        if (name != null) {
-            const text = `In reply to ${name}`;
-            annotation = Annotation.createWithText(text);
-            annotation.uri = uriForAccount(reply.parent.author);
+    if (item.reply != null && item.reply.parent != null) {
+    	if (item.post.author.handle == item.reply.parent.author?.handle) {
+			const text = "Replying to self";
+			annotation = Annotation.createWithText(text);
+			annotation.uri = uriForAccount(item.post.author);
+    	}
+    	else {
+			let name = nameForAccount(item.reply.parent.author);
+			if (name != null) {
+				const text = `In reply to ${name}`;
+				annotation = Annotation.createWithText(text);
+				annotation.uri = uriForAccount(item.reply.parent.author);
+			}
         }
     }
     
@@ -594,3 +678,180 @@ function bytesToString(bytes) {
     return resultString;
 }
 
+// By being in bluesky-shared.js, all of the Bluesky connectors get this.
+// However, most actions will not work unless authenticated! So be sure to
+// edit the actions.json file for each connector and only include the ones
+// that can actually work for the non-authorized connector variants!
+async function performAction(actionId, actionValue, item) {
+	let actions = item.actions;
+	let actionValues = JSON.parse(actionValue);
+	
+	try {
+		let did = getItem("did");
+		if (did == null) {
+			did = await getSessionDid();
+			setItem("did", did);
+		}
+
+		let date = new Date().toISOString();
+		if (actionId == "like") {
+			const body = {
+				collection: "app.bsky.feed.like",
+				repo: did,
+				record : {
+					"$type": "app.bsky.feed.like",
+					subject: {
+						uri: actionValues["uri"],
+						cid: actionValues["cid"]
+					},
+					createdAt: date,
+				}
+			};
+			
+			const url = `${site}/xrpc/com.atproto.repo.createRecord`;
+			const parameters = JSON.stringify(body);
+			const extraHeaders = { "content-type": "application/json" };
+			const text = await sendRequest(url, "POST", parameters, extraHeaders);
+			const jsonObject = JSON.parse(text);
+			const rkey = jsonObject.uri.split("/").pop();
+			
+			delete actions["like"];
+			const values = { uri: actionValues["uri"], cid: actionValues["cid"], rkey: rkey };
+			actions["unlike"] = JSON.stringify(values);
+			item.actions = actions;
+			actionComplete(item, null);
+		}
+		else if (actionId == "unlike") {
+			const body = {
+				collection: "app.bsky.feed.like",
+				repo: did,
+				rkey: actionValues["rkey"]
+			};
+			
+			const url = `${site}/xrpc/com.atproto.repo.deleteRecord`;
+			const parameters = JSON.stringify(body);
+			const extraHeaders = { "content-type": "application/json" };
+			const text = await sendRequest(url, "POST", parameters, extraHeaders);
+			const jsonObject = JSON.parse(text);
+
+			delete actions["unlike"];
+			const values = { uri: actionValues["uri"], cid: actionValues["cid"] };
+			actions["like"] = JSON.stringify(values);
+			item.actions = actions;
+			actionComplete(item, null);
+		}
+		else if (actionId == "repost") {
+			const body = {
+				collection: "app.bsky.feed.repost",
+				repo: did,
+				record : {
+					"$type": "app.bsky.feed.repost",
+					subject: {
+						uri: actionValues["uri"],
+						cid: actionValues["cid"]
+					},
+					createdAt: date,
+				}
+			};
+			
+			const url = `${site}/xrpc/com.atproto.repo.createRecord`;
+			const parameters = JSON.stringify(body);
+			const extraHeaders = { "content-type": "application/json" };
+			const text = await sendRequest(url, "POST", parameters, extraHeaders);
+			const jsonObject = JSON.parse(text);
+			const rkey = jsonObject.uri.split("/").pop();
+			
+			delete actions["repost"];
+			const values = { uri: actionValues["uri"], cid: actionValues["cid"], rkey: rkey };
+			actions["unrepost"] = JSON.stringify(values);
+			item.actions = actions;
+			actionComplete(item, null);
+		}
+		else if (actionId == "unrepost") {
+			const body = {
+				collection: "app.bsky.feed.repost",
+				repo: did,
+				rkey: actionValues["rkey"]
+			};
+			
+			const url = `${site}/xrpc/com.atproto.repo.deleteRecord`;
+			const parameters = JSON.stringify(body);
+			const extraHeaders = { "content-type": "application/json" };
+			const text = await sendRequest(url, "POST", parameters, extraHeaders);
+			const jsonObject = JSON.parse(text);
+			
+			delete actions["unrepost"];
+			const values = { uri: actionValues["uri"], cid: actionValues["cid"] };
+			actions["repost"] = JSON.stringify(values);
+			item.actions = actions;
+			actionComplete(item, null);
+		}
+		else if (actionId == "save") {
+			const body = {
+				uri: actionValues["uri"],
+				cid: actionValues["cid"]
+			};
+			
+			const url = `${site}/xrpc/app.bsky.bookmark.createBookmark`;
+			const parameters = JSON.stringify(body);
+			const extraHeaders = { "content-type": "application/json" };
+			const text = await sendRequest(url, "POST", parameters, extraHeaders);
+
+			delete actions["save"];
+			const values = { uri: actionValues["uri"], cid: actionValues["cid"] };
+			actions["unsave"] = JSON.stringify(values);
+			item.actions = actions;
+			actionComplete(item);
+		}
+		else if (actionId == "unsave") {
+			const body = {
+				uri: actionValues["uri"]
+			};
+
+			const url = `${site}/xrpc/app.bsky.bookmark.deleteBookmark`;
+			const parameters = JSON.stringify(body);
+			const extraHeaders = { "content-type": "application/json" };
+			const text = await sendRequest(url, "POST", parameters, extraHeaders);
+			
+			delete actions["unsave"];
+			const values = { uri: actionValues["uri"], cid: actionValues["cid"] };
+			actions["save"] = JSON.stringify(values);
+			item.actions = actions;
+			actionComplete(item);
+		}
+		else if (actionId == "thread" || actionId == "replies") {
+			const uri = actionValues["uri"];
+			const response = await sendRequest(`${site}/xrpc/app.bsky.feed.getPostThread?uri=${uri}`);
+			const json = JSON.parse(response);
+			const firstItem = json["thread"];
+			
+			let results = [];
+			let parents = parentsForItem(firstItem, true);
+			results.push(...parents);
+			
+			// NOTE: This is a workaround for a problem with the media attachments on Bluesky. The paths for videos end
+			// in .m3u8, which is a container format that can contain audio or video. This connector explicitly sets the
+			// MIME type to video/mp4, but that's converted to a .movie UTType internally by Tapestry. The item that's provided
+			// to this action gets a MIME type that's generated from the path extension, and that's returned as audio. The
+			// result is that the videos no longer play.
+			//
+			// To fix this, we create a new post for the item returned by the API, and patch the attachments (preserving other
+			// attributes like annotations and dates).
+			const patchPost = postForItem(firstItem, true);
+			item.attachments = patchPost.attachments;
+			results.push(item);
+			
+			for (const reply of firstItem.replies) {
+				results.push(postForItem(reply, true));
+			}
+			actionComplete(results);
+		}		
+		else {
+			let error = new Error(`actionId "${actionId}" not implemented`);
+			actionComplete(null, error);
+		}
+	}
+	catch (error) {
+		actionComplete(null, error);
+	}
+}
